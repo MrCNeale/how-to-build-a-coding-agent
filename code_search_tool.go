@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -317,6 +318,28 @@ type CodeSearchInput struct {
 
 var CodeSearchInputSchema = GenerateSchema[CodeSearchInput]()
 
+func validatePath(requestedPath string) (string, error) {
+	if strings.Contains(requestedPath, "\x00") {
+		return "", fmt.Errorf("path contains null bytes")
+	}
+
+	absPath, err := filepath.Abs(requestedPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %w", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+
+	if !strings.HasPrefix(absPath, wd+string(filepath.Separator)) && absPath != wd {
+		return "", fmt.Errorf("access denied: path '%s' is outside the working directory", requestedPath)
+	}
+
+	return absPath, nil
+}
+
 func ReadFile(input json.RawMessage) (string, error) {
 	readFileInput := ReadFileInput{}
 	err := json.Unmarshal(input, &readFileInput)
@@ -324,13 +347,18 @@ func ReadFile(input json.RawMessage) (string, error) {
 		panic(err)
 	}
 
-	log.Printf("Reading file: %s", readFileInput.Path)
-	content, err := os.ReadFile(readFileInput.Path)
+	safePath, err := validatePath(readFileInput.Path)
 	if err != nil {
-		log.Printf("Failed to read file %s: %v", readFileInput.Path, err)
 		return "", err
 	}
-	log.Printf("Successfully read file %s (%d bytes)", readFileInput.Path, len(content))
+
+	log.Printf("Reading file: %s", safePath)
+	content, err := os.ReadFile(safePath)
+	if err != nil {
+		log.Printf("Failed to read file %s: %v", safePath, err)
+		return "", err
+	}
+	log.Printf("Successfully read file %s (%d bytes)", safePath, len(content))
 	return string(content), nil
 }
 
@@ -345,6 +373,12 @@ func ListFiles(input json.RawMessage) (string, error) {
 	if listFilesInput.Path != "" {
 		dir = listFilesInput.Path
 	}
+
+	safeDir, err := validatePath(dir)
+	if err != nil {
+		return "", err
+	}
+	dir = safeDir
 
 	log.Printf("Listing files in directory: %s", dir)
 	cmd := exec.Command("find", dir, "-type", "f", "-not", "-path", "*/.devenv/*", "-not", "-path", "*/.git/*")
@@ -368,6 +402,34 @@ func ListFiles(input json.RawMessage) (string, error) {
 	return string(result), nil
 }
 
+var dangerousPatterns = []string{
+	"rm -rf /",
+	"rm -rf /*",
+	"mkfs.",
+	"dd if=/dev/",
+	"> /dev/sd",
+	"chmod -R 777 /",
+	":(){ :|:& };:",
+	"fork bomb",
+	"/etc/shadow",
+	"/etc/passwd",
+}
+
+func validateBashCommand(command string) error {
+	if command == "" {
+		return fmt.Errorf("command is required")
+	}
+
+	lowerCmd := strings.ToLower(command)
+	for _, pattern := range dangerousPatterns {
+		if strings.Contains(lowerCmd, pattern) {
+			return fmt.Errorf("command blocked: contains dangerous pattern '%s'", pattern)
+		}
+	}
+
+	return nil
+}
+
 func Bash(input json.RawMessage) (string, error) {
 	bashInput := BashInput{}
 	err := json.Unmarshal(input, &bashInput)
@@ -375,8 +437,19 @@ func Bash(input json.RawMessage) (string, error) {
 		return "", err
 	}
 
+	if err := validateBashCommand(bashInput.Command); err != nil {
+		return "", err
+	}
+
 	log.Printf("Executing bash command: %s", bashInput.Command)
 	cmd := exec.Command("bash", "-c", bashInput.Command)
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+	cmd.Dir = wd
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Bash command failed: %v", err)
@@ -417,9 +490,13 @@ func CodeSearch(input json.RawMessage) (string, error) {
 	// Add pattern
 	args = append(args, codeSearchInput.Pattern)
 
-	// Add path if specified
+	// Add path if specified, with validation
 	if codeSearchInput.Path != "" {
-		args = append(args, codeSearchInput.Path)
+		safePath, err := validatePath(codeSearchInput.Path)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, safePath)
 	} else {
 		args = append(args, ".")
 	}
