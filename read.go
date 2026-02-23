@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/invopop/jsonschema"
 )
 
@@ -27,9 +28,21 @@ func main() {
 		log.SetPrefix("")
 	}
 
-	client := anthropic.NewClient()
+	endpoint := os.Getenv("AZURE_AI_FOUNDRY_ENDPOINT")
+	apiKey := os.Getenv("AZURE_AI_FOUNDRY_KEY")
+	model := os.Getenv("AZURE_DEPLOYMENT_NAME")
+	if model == "" {
+		model = "claude-sonnet-4-6"
+	}
+
+	client := anthropic.NewClient(
+		option.WithBaseURL(endpoint),
+		option.WithAPIKey(apiKey),
+		option.WithHeader("x-api-key", apiKey),
+		option.WithHeader("anthropic-version", "2023-06-01"),
+	)
 	if *verbose {
-		log.Println("Anthropic client initialized")
+		log.Println("Anthropic Azure client initialized")
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -44,7 +57,7 @@ func main() {
 	if *verbose {
 		log.Printf("Initialized %d tools", len(tools))
 	}
-	agent := NewAgent(&client, getUserMessage, tools, *verbose)
+	agent := NewAgent(&client, getUserMessage, tools, model, *verbose)
 	err := agent.Run(context.TODO())
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
@@ -55,12 +68,14 @@ func NewAgent(
 	client *anthropic.Client,
 	getUserMessage func() (string, bool),
 	tools []ToolDefinition,
+	model string,
 	verbose bool,
 ) *Agent {
 	return &Agent{
 		client:         client,
 		getUserMessage: getUserMessage,
 		tools:          tools,
+		model:          model,
 		verbose:        verbose,
 	}
 }
@@ -69,6 +84,7 @@ type Agent struct {
 	client         *anthropic.Client
 	getUserMessage func() (string, bool)
 	tools          []ToolDefinition
+	model          string
 	verbose        bool
 }
 
@@ -78,7 +94,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.verbose {
 		log.Println("Starting chat session with tools enabled")
 	}
-	fmt.Println("Chat with Claude (use 'ctrl-c' to quit)")
+	fmt.Println("Chat with Claude on Azure (use 'ctrl-c' to quit)")
 
 	for {
 		fmt.Print("\u001b[94mYou\u001b[0m: ")
@@ -229,11 +245,11 @@ func (a *Agent) runInference(ctx context.Context, conversation []anthropic.Messa
 	}
 
 	if a.verbose {
-		log.Printf("Making API call to Claude with model: %s and %d tools", anthropic.ModelClaude3_7SonnetLatest, len(anthropicTools))
+		log.Printf("Making API call to Azure deployment: %s with %d tools", a.model, len(anthropicTools))
 	}
 
 	message, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaude3_7SonnetLatest,
+		Model:     anthropic.Model(a.model),
 		MaxTokens: int64(1024),
 		Messages:  conversation,
 		Tools:     anthropicTools,

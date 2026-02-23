@@ -5,30 +5,29 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
 func main() {
 	verbose := flag.Bool("verbose", false, "enable verbose logging")
 	flag.Parse()
 
-	if *verbose {
-		log.SetOutput(os.Stderr)
-		log.SetFlags(log.LstdFlags | log.Lshortfile)
-		log.Println("Verbose logging enabled")
-	} else {
-		log.SetOutput(os.Stdout)
-		log.SetFlags(0)
-		log.SetPrefix("")
+	endpoint := os.Getenv("AZURE_AI_FOUNDRY_ENDPOINT")
+	apiKey := os.Getenv("AZURE_AI_FOUNDRY_KEY")
+	model := os.Getenv("AZURE_DEPLOYMENT_NAME")
+	if model == "" {
+		model = "claude-sonnet-4-6"
 	}
 
-	client := anthropic.NewClient()
-	if *verbose {
-		log.Println("Anthropic client initialized")
-	}
+	client := anthropic.NewClient(
+		option.WithBaseURL(endpoint+"/anthropic/"),
+		option.WithAPIKey(apiKey),
+		option.WithDefaultHeader("x-api-key", apiKey),
+		option.WithDefaultHeader("anthropic-version", "2023-06-01"),
+	)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	getUserMessage := func() (string, bool) {
@@ -38,17 +37,17 @@ func main() {
 		return scanner.Text(), true
 	}
 
-	agent := NewAgent(&client, getUserMessage, *verbose)
-	err := agent.Run(context.TODO())
-	if err != nil {
+	agent := NewAgent(&client, getUserMessage, model, *verbose)
+	if err := agent.Run(context.TODO()); err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
 }
 
-func NewAgent(client *anthropic.Client, getUserMessage func() (string, bool), verbose bool) *Agent {
+func NewAgent(client *anthropic.Client, getUserMessage func() (string, bool), model string, verbose bool) *Agent {
 	return &Agent{
 		client:         client,
 		getUserMessage: getUserMessage,
+		model:          model,
 		verbose:        verbose,
 	}
 }
@@ -56,91 +55,42 @@ func NewAgent(client *anthropic.Client, getUserMessage func() (string, bool), ve
 type Agent struct {
 	client         *anthropic.Client
 	getUserMessage func() (string, bool)
+	model          string
 	verbose        bool
 }
 
 func (a *Agent) Run(ctx context.Context) error {
-	conversation := []anthropic.MessageParam{}
+	var conversation []anthropic.MessageParam
 
-	if a.verbose {
-		log.Println("Starting chat session")
-	}
-	fmt.Println("Chat with Claude (use 'ctrl-c' to quit)")
+	fmt.Println("Chat with Claude on Azure | 'ctrl-c' to quit")
 
 	for {
 		fmt.Print("\u001b[94mYou\u001b[0m: ")
 		userInput, ok := a.getUserMessage()
-		if !ok {
-			if a.verbose {
-				log.Println("User input ended, breaking from chat loop")
-			}
+		if !ok || userInput == "" {
 			break
 		}
 
-		// Skip empty messages
-		if userInput == "" {
-			if a.verbose {
-				log.Println("Skipping empty message")
-			}
-			continue
-		}
+		conversation = append(conversation, anthropic.NewUserMessage(anthropic.NewTextBlock(userInput)))
 
 		if a.verbose {
-			log.Printf("User input received: %q", userInput)
+			fmt.Printf("[verbose] sending %d messages to model %s\n", len(conversation), a.model)
 		}
 
-		userMessage := anthropic.NewUserMessage(anthropic.NewTextBlock(userInput))
-		conversation = append(conversation, userMessage)
-
-		if a.verbose {
-			log.Printf("Sending message to Claude, conversation length: %d", len(conversation))
-		}
-
-		message, err := a.runInference(ctx, conversation)
+		resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+			Model:     a.model,
+			MaxTokens: 1024,
+			Messages:  conversation,
+		})
 		if err != nil {
-			if a.verbose {
-				log.Printf("Error during inference: %v", err)
-			}
-			return err
-		}
-		conversation = append(conversation, message.ToParam())
-
-		if a.verbose {
-			log.Printf("Received response from Claude with %d content blocks", len(message.Content))
+			return fmt.Errorf("inference error: %w", err)
 		}
 
-		for _, content := range message.Content {
-			switch content.Type {
-			case "text":
-				fmt.Printf("\u001b[93mClaude\u001b[0m: %s\n", content.Text)
-			}
-		}
+		assistantText := resp.Content[0].Text
+		fmt.Printf("\u001b[93mClaude\u001b[0m: %s\n", assistantText)
+
+		conversation = append(conversation, anthropic.NewAssistantMessage(anthropic.NewTextBlock(assistantText)))
 	}
 
-	if a.verbose {
-		log.Println("Chat session ended")
-	}
 	return nil
-}
-
-func (a *Agent) runInference(ctx context.Context, conversation []anthropic.MessageParam) (*anthropic.Message, error) {
-	if a.verbose {
-		log.Printf("Making API call to Claude with model: %s", anthropic.ModelClaude3_7SonnetLatest)
-	}
-
-	message, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.ModelClaude3_7SonnetLatest,
-		MaxTokens: int64(1024),
-		Messages:  conversation,
-	})
-
-	if a.verbose {
-		if err != nil {
-			log.Printf("API call failed: %v", err)
-		} else {
-			log.Printf("API call successful, response received")
-		}
-	}
-
-	return message, err
 }

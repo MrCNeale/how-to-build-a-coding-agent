@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(go vet:*)",
+      "Bash(wsl -d NixOS bash -lc \"cd /home/nixos/how-to-build-a-coding-agent && go vet read.go\":*)",
+      "Bash(wsl -d NixOS bash -lc \"cd /home/nixos/how-to-build-a-coding-agent && which devenv && devenv shell -- go vet read.go\":*)",
+      "Bash(wsl -d NixOS bash -lc \"cd /home/nixos/how-to-build-a-coding-agent && devenv shell -- go vet:*)"
+    ]
+  }
+}

@@ -5,6 +5,7 @@ go 1.24.2
 require (
 	github.com/anthropics/anthropic-sdk-go v1.6.2
 	github.com/invopop/jsonschema v0.13.0
+	github.com/openai/openai-go v1.12.0
 )
 
 require (
