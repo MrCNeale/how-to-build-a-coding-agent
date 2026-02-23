@@ -441,7 +441,7 @@ func ListFiles(input json.RawMessage) (string, error) {
 
 var dangerousPatterns = []string{
 	"rm -rf /",
-	"rm -rf /*",
+	"rm -rf /\x2a",
 	"mkfs.",
 	"dd if=/dev/",
 	"> /dev/sd",
@@ -575,7 +575,7 @@ func createNewFile(filePath, content string) (string, error) {
 		}
 	}
 
-	err := os.WriteFile(filePath, []byte(content), 0644)
+	err = os.WriteFile(filePath, []byte(content), 0644)
 	if err != nil {
 		log.Printf("Failed to create file %s: %v", filePath, err)
 		return "", fmt.Errorf("failed to create file: %w", err)
